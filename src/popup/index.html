@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MindArchive</title>
+  <link rel="stylesheet" href="./popup.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Header -->
+    <header class="header">
+      <h1 class="logo">🧠 MindArchive</h1>
+      <span id="platformBadge" class="badge badge--inactive">检测中…</span>
+    </header>
+
+    <!-- Status Bar -->
+    <div id="statusBar" class="status-bar">
+      <span id="statusText">正在检测平台…</span>
+    </div>
+
+    <!-- Main Actions -->
+    <section id="actions" class="actions" style="display: none;">
+      <button id="loadHistoryBtn" class="btn btn--loader btn--full"
+              title="⚠ 自动加载完整历史对话可能需要较长时间。&#10;&#10;由于 ChatGPT 使用动态懒加载机制，超长对话需要分批次加载历史消息。&#10;&#10;如果对话特别长，建议手动拖动右侧滚动条到更早的对话位置，再使用自动加载功能，可明显提高速度与完整性。">
+        ⬆ 加载完整对话
+      </button>
+      <div class="actions-row">
+        <button id="captureBtn" class="btn btn--primary">
+          📥 捕获对话
+        </button>
+        <button id="exportBtn" class="btn btn--secondary" disabled>
+          💾 导出
+        </button>
+      </div>
+    </section>
+
+    <!-- History Loading Progress -->
+    <section id="loadProgress" class="load-progress" style="display: none;">
+      <div class="progress-bar">
+        <div id="progressFill" class="progress-fill"></div>
+      </div>
+      <span id="progressText" class="progress-text">正在加载历史消息…</span>
+    </section>
+
+    <!-- Conversation Preview -->
+    <section id="preview" class="preview" style="display: none;">
+      <div class="preview-header">
+        <h3 id="previewTitle">对话预览</h3>
+        <span id="previewCount" class="badge badge--info">0 条消息</span>
+      </div>
+      <div id="previewContent" class="preview-content"></div>
+    </section>
+
+    <!-- Settings -->
+    <section class="settings">
+      <label class="toggle">
+        <input type="checkbox" id="autoSaveToggle" />
+        <span class="toggle-label">自动保存到本地存储</span>
+      </label>
+    </section>
+
+    <!-- Empty state -->
+    <div id="emptyState" class="empty-state">
+      <p>打开 ChatGPT 或 Claude 对话页面开始使用</p>
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <span>v0.1.0 — 本地优先 · 隐私至上</span>
+    </footer>
+  </div>
+
+  <script type="module" src="./popup.ts"></script>
+</body>
+</html>
