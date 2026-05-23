@@ -53,7 +53,12 @@
     </section>
 
     <!-- Settings -->
-    <section class="settings">
+    <section id="settingsSection" class="settings" style="display: none;">
+      <div class="settings-header">⚙️ 设置</div>
+      <label class="toggle">
+        <input type="checkbox" id="autoLoadToggle" />
+        <span class="toggle-label">捕获前自动加载完整历史</span>
+      </label>
       <label class="toggle">
         <input type="checkbox" id="autoSaveToggle" />
         <span class="toggle-label">自动保存到本地存储</span>

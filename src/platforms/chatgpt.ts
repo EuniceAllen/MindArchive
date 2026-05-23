@@ -23,7 +23,6 @@ import type { PlatformAdapter } from "./base";
 import type { Conversation, Message } from "@/core/types";
 import { extractMessages, extractTitle } from "./chatgpt/extractor";
 import { observeMessages } from "./chatgpt/observer";
-import { loadEntireConversationHistory } from "./chatgpt/historyLoader";
 
 export class ChatGPTAdapter implements PlatformAdapter {
   readonly id = "chatgpt";
@@ -53,10 +52,9 @@ export class ChatGPTAdapter implements PlatformAdapter {
   }
 
   async captureConversation(): Promise<Conversation> {
-    // Step 1: load full history (scrolls up to trigger lazy loading)
-    await loadEntireConversationHistory();
+    // Note: history loading is now controlled by the popup via the
+    // "auto-load before capture" setting — no longer called here.
 
-    // Step 2: extract all messages now in the DOM
     const messages = this.extractMessages();
 
     console.log(

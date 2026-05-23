@@ -80,12 +80,11 @@ async function captureCurrent(): Promise<CaptureResult | { error: string }> {
   const conversation = await activeAdapter.captureConversation();
   capturedMessages = conversation.messages.length;
 
-  // Check auto-save setting
-  getAutoSave().then((autoSave) => {
-    if (autoSave) {
-      saveToStorage(conversation);
-    }
-  });
+  // Check auto-save setting (awaited properly)
+  const autoSave = await getAutoSave();
+  if (autoSave) {
+    await saveToStorage(conversation);
+  }
 
   return createCaptureResult(conversation);
 }

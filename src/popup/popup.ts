@@ -8,7 +8,7 @@
 
 import type { CaptureResult } from "@/core/types";
 import type { HistoryLoadProgress } from "@/platforms/chatgpt/historyLoader";
-import { getAutoSave, setAutoSave } from "@/storage/export";
+import { getAutoSave, setAutoSave, getAutoLoad, setAutoLoad } from "@/storage/export";
 
 // ─── DOM References ───────────────────────────────────────────
 
@@ -26,7 +26,9 @@ const previewSection = document.getElementById("preview")!;
 const previewTitle = document.getElementById("previewTitle")!;
 const previewCount = document.getElementById("previewCount")!;
 const previewContent = document.getElementById("previewContent")!;
+const autoLoadToggle = document.getElementById("autoLoadToggle")! as HTMLInputElement;
 const autoSaveToggle = document.getElementById("autoSaveToggle")! as HTMLInputElement;
+const settingsSection = document.getElementById("settingsSection")!;
 const emptyState = document.getElementById("emptyState")!;
 
 // ─── State ────────────────────────────────────────────────────
@@ -36,8 +38,9 @@ let lastCaptureResult: CaptureResult | null = null;
 // ─── Initialization ───────────────────────────────────────────
 
 document.addEventListener("DOMContentLoaded", async () => {
-  // Load auto-save preference
+  // Load auto-save & auto-load preferences
   autoSaveToggle.checked = await getAutoSave();
+  autoLoadToggle.checked = await getAutoLoad();
 
   // Detect platform on the active tab
   await detectPlatform();
@@ -56,12 +59,14 @@ async function detectPlatform() {
       platformBadge.className = "badge badge--active";
       updateStatus(`已连接到 ${response.platform.name} — 可以捕获对话`);
       actionsSection.style.display = "flex";
+      settingsSection.style.display = "flex";
       emptyState.style.display = "none";
     } else {
       platformBadge.textContent = "未检测到";
       platformBadge.className = "badge badge--inactive";
       updateStatus("未检测到支持的 AI 平台");
       actionsSection.style.display = "none";
+      settingsSection.style.display = "none";
       emptyState.style.display = "block";
     }
   } catch (err) {
@@ -69,6 +74,7 @@ async function detectPlatform() {
     platformBadge.className = "badge badge--inactive";
     updateStatus("无法连接到页面，请刷新后重试");
     actionsSection.style.display = "none";
+    settingsSection.style.display = "none";
     emptyState.style.display = "block";
   }
 }
@@ -78,6 +84,35 @@ async function detectPlatform() {
 captureBtn.addEventListener("click", async () => {
   captureBtn.disabled = true;
   captureBtn.textContent = "⏳ 捕获中…";
+
+  // If auto-load is enabled, trigger full history loading first
+  if (autoLoadToggle.checked) {
+    updateStatus("设置要求先加载完整历史…");
+
+    loadHistoryBtn.disabled = true;
+    loadHistoryBtn.textContent = "⏳ 加载中…";
+    loadHistoryBtn.classList.add("is-loading");
+    loadProgress.style.display = "flex";
+    progressFill.className = "progress-fill is-indeterminate";
+    progressText.textContent = "正在加载历史消息…";
+    progressText.className = "progress-text";
+    setLoadingState(true);
+
+    try {
+      await sendToActiveTab({ type: "LOAD_FULL_HISTORY" });
+      // Wait for HISTORY_LOAD_COMPLETE from content script
+      await waitForHistoryLoadComplete();
+    } catch {
+      updateStatus("历史加载失败，继续尝试捕获当前可见消息…", "info");
+    }
+
+    // Reset load button state
+    loadHistoryBtn.disabled = false;
+    loadHistoryBtn.textContent = "⬆ 加载完整对话";
+    loadHistoryBtn.classList.remove("is-loading");
+    setLoadingState(false);
+  }
+
   updateStatus("正在从页面提取对话…");
 
   try {
@@ -160,6 +195,18 @@ autoSaveToggle.addEventListener("change", async () => {
   );
 });
 
+// ─── Auto-load Toggle ─────────────────────────────────────────
+
+autoLoadToggle.addEventListener("change", async () => {
+  await setAutoLoad(autoLoadToggle.checked);
+  updateStatus(
+    autoLoadToggle.checked
+      ? "自动加载已开启 — 捕获前将自动加载完整历史"
+      : "自动加载已关闭 — 仅捕获当前可见消息",
+    "info"
+  );
+});
+
 // ─── Listen for real-time updates from content script ─────────
 
 chrome.runtime.onMessage.addListener((message) => {
@@ -238,6 +285,26 @@ function handleLoadComplete(messageCount: number) {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────
+
+/**
+ * Returns a promise that resolves when HISTORY_LOAD_COMPLETE
+ * is received from the content script (or rejects on timeout).
+ */
+function waitForHistoryLoadComplete(timeoutMs = 120_000): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("timeout")), timeoutMs);
+
+    const handler = (message: { type?: string; messageCount?: number }) => {
+      if (message.type === "HISTORY_LOAD_COMPLETE") {
+        clearTimeout(timer);
+        chrome.runtime.onMessage.removeListener(handler);
+        resolve(message.messageCount ?? 0);
+      }
+    };
+
+    chrome.runtime.onMessage.addListener(handler);
+  });
+}
 
 async function sendToActiveTab(message: any): Promise<any> {
   return new Promise((resolve) => {
