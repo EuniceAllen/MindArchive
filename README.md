@@ -1,11 +1,3 @@
-下面给你做了一版**更偏“产品级 + 开源爆款风格”的 README**，重点强化了三点：
-
-* 第一屏就能让人理解“你是干什么的”
-* 更强的“问题 → 解决方案”表达
-* 更像一个可以发布到 Chrome Web Store 的项目
-
----
-
 # 🧠 MindArchive
 
 ![MIT](https://img.shields.io/badge/license-MIT-green)
