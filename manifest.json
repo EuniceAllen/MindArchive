@@ -20,7 +20,8 @@
   "permissions": ["storage", "activeTab"],
   "host_permissions": [
     "https://chatgpt.com/*",
-    "https://claude.ai/*"
+    "https://claude.ai/*",
+    "https://chat.deepseek.com/*"
   ],
   "background": {
     "service_worker": "src/background.ts",
@@ -30,7 +31,8 @@
     {
       "matches": [
         "https://chatgpt.com/*",
-        "https://claude.ai/*"
+        "https://claude.ai/*",
+        "https://chat.deepseek.com/*"
       ],
       "js": ["src/content/index.ts"],
       "run_at": "document_idle"

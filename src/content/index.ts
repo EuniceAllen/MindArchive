@@ -154,37 +154,126 @@ async function loadFullHistory(): Promise<{ success: boolean; messageCount?: num
     return { success: false, error: "No platform detected." };
   }
 
-  // Only ChatGPT supports history loading (lazy-loaded DOM)
-  if (activeAdapter.id !== "chatgpt") {
-    return { success: false, error: "History loading is only supported on ChatGPT." };
+  // ChatGPT has a specialized loader (virtualized list, lazy batches)
+  if (activeAdapter.id === "chatgpt") {
+    try {
+      const { loadEntireConversationHistory } = await import(
+        "@/platforms/chatgpt/historyLoader"
+      );
+      const finalCount = await loadEntireConversationHistory((progress) => {
+        chrome.runtime.sendMessage({
+          type: "HISTORY_LOAD_PROGRESS", payload: progress,
+        }).catch(() => {});
+      });
+
+      chrome.runtime.sendMessage({
+        type: "HISTORY_LOAD_COMPLETE", messageCount: finalCount,
+      }).catch(() => {});
+
+      return { success: true, messageCount: finalCount };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { success: false, error: msg };
+    }
   }
 
+  // Other platforms: find scrollable container, scroll up progressively
   try {
-    // Dynamic import to keep the history loader chatgpt-specific
-    const { loadEntireConversationHistory } = await import(
-      "@/platforms/chatgpt/historyLoader"
-    );
-
-    const finalCount = await loadEntireConversationHistory((progress) => {
-      // Relay progress to the popup
-      chrome.runtime.sendMessage({
-        type: "HISTORY_LOAD_PROGRESS",
-        payload: progress,
-      }).catch(() => {});
-    });
-
-    // Notify popup that loading is done
     chrome.runtime.sendMessage({
-      type: "HISTORY_LOAD_COMPLETE",
-      messageCount: finalCount,
+      type: "HISTORY_LOAD_PROGRESS",
+      payload: { phase: "starting", currentCount: 0, scrollIteration: 0, reachedTop: false },
     }).catch(() => {});
 
+    const finalCount = await scrollToTop(activeAdapter);
     return { success: true, messageCount: finalCount };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error("[MindArchive] History loading failed:", msg);
     return { success: false, error: msg };
   }
+}
+
+/** Find the real scrollable container and progressively scroll to top */
+async function scrollToTop(
+  adapter: import("@/platforms/base").PlatformAdapter
+): Promise<number> {
+  // Find the scrollable container: look for overflow-y elements,
+  // pick the one with most text content (likely the conversation area)
+  const candidates = Array.from(
+    document.querySelectorAll("*")
+  ).filter((el) => {
+    const style = window.getComputedStyle(el);
+    return (
+      (style.overflowY === "auto" || style.overflowY === "scroll") &&
+      el.scrollHeight > el.clientHeight + 100 &&
+      (el.textContent?.length || 0) > 200
+    );
+  }) as HTMLElement[];
+
+  // Pick the one with the most text (conversation area)
+  const container = candidates.length > 0
+    ? candidates.reduce((a, b) =>
+        (a.textContent?.length || 0) > (b.textContent?.length || 0) ? a : b
+      )
+    : null;
+
+  console.log("[MindArchive] Scroll container:", container?.tagName, container?.className?.slice(0, 60));
+
+  let prevCount = adapter.extractMessages().length;
+  let stuck = 0;
+
+  for (let i = 1; i <= 40; i++) {
+    if (container) {
+      const prev = container.scrollTop;
+      container.scrollTop = Math.max(0, prev - 600);
+      container.dispatchEvent(new Event("scroll", { bubbles: true }));
+      // Some platforms also need window scroll
+      window.scrollBy({ top: -600, behavior: "instant" });
+    } else {
+      window.scrollBy({ top: -600, behavior: "instant" });
+    }
+
+    await sleep(400);
+
+    const currentCount = adapter.extractMessages().length;
+
+    chrome.runtime.sendMessage({
+      type: "HISTORY_LOAD_PROGRESS",
+      payload: {
+        phase: "loading" as const,
+        currentCount,
+        scrollIteration: i,
+        reachedTop: container ? container.scrollTop <= 0 : window.scrollY <= 0,
+      },
+    }).catch(() => {});
+
+    if (currentCount === prevCount) {
+      stuck++;
+      if (stuck >= 4) break;
+    } else {
+      stuck = 0;
+    }
+
+    prevCount = currentCount;
+  }
+
+  const finalCount = adapter.extractMessages().length;
+
+  chrome.runtime.sendMessage({
+    type: "HISTORY_LOAD_PROGRESS",
+    payload: {
+      phase: "complete" as const,
+      currentCount: finalCount,
+      scrollIteration: 1,
+      reachedTop: true,
+      finalCount,
+    },
+  }).catch(() => {});
+
+  return finalCount;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 // ─── Auto-init ───────────────────────────────────────────────

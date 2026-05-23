@@ -3,3 +3,5 @@ dist/
 .vite/
 *.crx
 *.pem
+*.zip
+page.html

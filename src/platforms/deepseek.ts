@@ -1,31 +1,17 @@
 // ============================================================
-// MindArchive — Claude Platform Adapter
+// MindArchive — DeepSeek Platform Adapter
 // ============================================================
-// Thin adapter — delegates to claude/extractor and claude/observer.
-//
-// Claude.ai CONFIRMED DOM (from page source, 2025-05):
-//
-//   User:   [data-testid="user-message"]
-//   Claude: .font-claude-response
-//
-// ## Module layout
-//
-//   claude.ts            — this file, the adapter glue
-//   claude/extractor.ts  — DOM extraction & text cleaning
-//   claude/observer.ts   — MutationObserver for real-time capture
-// ============================================================
-
 import type { PlatformAdapter } from "./base";
 import type { Conversation, Message } from "@/core/types";
-import { extractMessages, extractTitle } from "./claude/extractor";
-import { observeMessages } from "./claude/observer";
+import { extractMessages, extractTitle } from "./deepseek/extractor";
+import { observeMessages } from "./deepseek/observer";
 
-export class ClaudeAdapter implements PlatformAdapter {
-  readonly id = "claude";
-  readonly name = "Claude";
+export class DeepSeekAdapter implements PlatformAdapter {
+  readonly id = "deepseek";
+  readonly name = "DeepSeek";
 
   detect(): boolean {
-    return window.location.hostname === "claude.ai";
+    return window.location.hostname === "chat.deepseek.com";
   }
 
   extractMessages(): Message[] {
@@ -44,7 +30,7 @@ export class ClaudeAdapter implements PlatformAdapter {
 
   async captureConversation(): Promise<Conversation> {
     const messages = this.extractMessages();
-    console.log(`[MindArchive] Claude captured: ${messages.length} messages`);
+    console.log(`[MindArchive] DeepSeek captured: ${messages.length} messages`);
 
     return {
       id: this.generateId(),
@@ -62,4 +48,3 @@ export class ClaudeAdapter implements PlatformAdapter {
     return `${this.id}_${ts}_${rand}`;
   }
 }
-
