@@ -8,11 +8,11 @@
 // state minimal and rely on chrome.storage for persistence.
 // ============================================================
 
-import type { CaptureResult } from "@/core/types";
+import type { ContentMessage, EventMessage } from "@/core/types";
 
 // ─── Installation ────────────────────────────────────────────
 
-chrome.runtime.onInstalled.addListener((details) => {
+chrome.runtime.onInstalled.addListener((details: chrome.runtime.InstalledDetails) => {
   if (details.reason === "install") {
     console.log("[MindArchive] Extension installed — welcome to your second brain.");
     // Initialize default settings
@@ -31,7 +31,7 @@ chrome.runtime.onInstalled.addListener((details) => {
 // The popup can't directly access content script functions
 // in MV3, so we relay messages through the background worker.
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message: ContentMessage | EventMessage, _sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) => {
   // Messages from content script — forward to popup if needed
   if (message.type === "NEW_MESSAGES") {
     if (message.payload) {
@@ -79,7 +79,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // ─── Tab Query Helper ────────────────────────────────────────
 
-async function relayToActiveTab(message: any): Promise<any> {
+async function relayToActiveTab(message: ContentMessage | EventMessage): Promise<Record<string, unknown>> {
   try {
     const [tab] = await chrome.tabs.query({
       active: true,

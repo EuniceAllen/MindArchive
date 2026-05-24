@@ -1,9 +1,18 @@
 // ============================================================
 // MindArchive — DeepSeek Platform Adapter
 // ============================================================
+// Thin adapter — delegates to deepseek/extractor and deepseek/observer.
+//
+// Extraction strategy (in priority order):
+//   1. API  — GET /api/v0/chat/history_messages?chat_session_id={id}
+//            Returns raw markdown per message fragment.
+//   2. DOM  — Query .ds-message elements with role detection
+//            Fallback when API is unavailable.
+// ============================================================
+
 import type { PlatformAdapter } from "./base";
 import type { Conversation, Message } from "@/core/types";
-import { extractMessages, extractTitle } from "./deepseek/extractor";
+import { extractMessages, extractTitle, fetchConversationFromApi } from "./deepseek/extractor";
 import { observeMessages } from "./deepseek/observer";
 
 export class DeepSeekAdapter implements PlatformAdapter {
@@ -29,8 +38,28 @@ export class DeepSeekAdapter implements PlatformAdapter {
   }
 
   async captureConversation(): Promise<Conversation> {
+    // Strategy 1: API (returns raw markdown, no DOM fragmentation)
+    const apiResult = await fetchConversationFromApi();
+
+    if (apiResult) {
+      console.log(
+        `[MindArchive] DeepSeek captured via API: ${apiResult.messages.length} messages`
+      );
+
+      return {
+        id: this.generateId(),
+        platform: this.id,
+        title: apiResult.title,
+        url: window.location.href,
+        messages: apiResult.messages,
+        capturedAt: new Date().toISOString(),
+      };
+    }
+
+    // Strategy 2: DOM fallback
+    console.log("[MindArchive] DeepSeek API unavailable, falling back to DOM");
     const messages = this.extractMessages();
-    console.log(`[MindArchive] DeepSeek captured: ${messages.length} messages`);
+    console.log(`[MindArchive] DeepSeek captured via DOM: ${messages.length} messages`);
 
     return {
       id: this.generateId(),

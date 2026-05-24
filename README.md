@@ -99,11 +99,18 @@ src/
 │   ├── registry.ts           # 平台注册中心
 │   ├── chatgpt.ts
 │   ├── claude.ts
-│   └── chatgpt/
-│       ├── extractor.ts      # DOM 解析
-│       ├── observer.ts       # 实时监听
-│       ├── historyLoader.ts  # 历史加载核心
-│       └── types.ts
+│   ├── deepseek.ts
+│   ├── chatgpt/
+│   │   ├── extractor.ts      # DOM 解析
+│   │   ├── observer.ts       # 实时监听
+│   │   ├── historyLoader.ts  # 历史加载核心
+│   │   └── types.ts
+│   ├── claude/
+│   │   ├── extractor.ts      # API 提取 + DOM 回退
+│   │   └── observer.ts       # 实时监听
+│   └── deepseek/
+│       ├── extractor.ts      # API 提取（递归分页）+ DOM 回退
+│       └── observer.ts       # 实时监听
 ├── formatters/
 │   └── markdown.ts           # 转 Markdown
 ├── storage/
@@ -144,13 +151,16 @@ src/
 
 ## 🗺 Roadmap
 
-### ✅ MVP（已完成）
+### ✅ 已完成
 
-* ChatGPT / Claude 支持
+* ChatGPT / Claude / DeepSeek 支持
 * Markdown 导出
 * 完整历史加载
 * 本地存储
 * 暗色模式
+* API 优先提取（Claude / DeepSeek 内建 API，避免 DOM 碎片）
+* 递归分页加载（DeepSeek 长对话）
+* 结构化内容块提取（Claude DOM 回退）
 
 ### 🚧 下一步
 
@@ -176,5 +186,29 @@ MindArchive 的目标是：
 ## 📄 License
 
 MIT
+
+---
+
+## 🏷 Changelog
+
+### v1.2.0 (2026-05-24)
+
+**Claude — API 优先提取**
+- 使用 claude.ai 内部 API (`/api/organizations/{org}/chat_conversations/{id}`) 作为主提取策略
+- API 返回原始 markdown，彻底避免 DOM 内容碎片化问题
+- DOM 深度优先遍历作为回退（`div[class*="font-user-message"]` / `div.font-claude-response`）
+- 支持结构化块提取：`text | heading | code_block | list | blockquote`
+
+**DeepSeek — API 递归分页提取**
+- 使用 DeepSeek 内部 API (`/api/v0/chat/history_messages`) 作为主提取策略
+- 递归分页：自动循环请求直到所有消息加载完毕（以 `count=50` 为批次）
+- 游标检测：自动识别 `next_seq_id` / `cursor` / `min_seq_id` 等分页字段
+- 消息去重 + 按 `message_id` 排序
+- DOM 回退仅在 HTTP/认证失败时触发
+
+**类型系统增强**
+- `ContentBlock` 联合类型：`TextBlock | HeadingBlock | CodeBlockBlock | ListBlock | BlockquoteBlock`
+- `Message` 新增可选字段：`uuid?`, `truncated?`, `attachments?`
+- 新增 `ClaudeApiMessage` / `ClaudeApiResponse` / `DeepSeekApiMessage` / `DeepSeekApiResponse` 类型
 
 ---

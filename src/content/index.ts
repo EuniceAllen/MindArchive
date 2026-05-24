@@ -12,7 +12,7 @@
 import { detectPlatform } from "@/platforms/registry";
 import { downloadConversation, createCaptureResult, saveToStorage, getAutoSave } from "@/storage/export";
 import type { PlatformAdapter } from "@/platforms/base";
-import type { CaptureResult } from "@/core/types";
+import type { CaptureResult, ContentMessage, EventMessage } from "@/core/types";
 import type { HistoryLoadProgress } from "@/platforms/chatgpt/historyLoader";
 
 // ─── State ───────────────────────────────────────────────────
@@ -23,18 +23,18 @@ let capturedMessages = 0;
 
 // ─── Message Handlers ────────────────────────────────────────
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message: ContentMessage, _sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) => {
   handleMessage(message).then(sendResponse);
   return true; // Keep channel open for async response
 });
 
-async function handleMessage(message: any): Promise<any> {
+async function handleMessage(message: ContentMessage): Promise<Record<string, unknown>> {
   switch (message.type) {
     case "DETECT_PLATFORM":
       return detectAndInit();
 
     case "CAPTURE_CONVERSATION":
-      return captureCurrent();
+      return captureCurrent() as unknown as Record<string, unknown>;
 
     case "EXPORT_CONVERSATION":
       return exportCurrent();
@@ -50,10 +50,11 @@ async function handleMessage(message: any): Promise<any> {
 
     case "LOAD_FULL_HISTORY":
       return loadFullHistory();
-
-    default:
-      return { error: `Unknown message type: ${message.type}` };
   }
+
+  // Exhaustive check — should never reach here
+  const _exhaustive: never = message;
+  return { error: `Unknown message type: ${String(_exhaustive)}` };
 }
 
 // ─── Initialization ──────────────────────────────────────────

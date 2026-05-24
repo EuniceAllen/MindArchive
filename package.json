@@ -1,6 +1,6 @@
 {
   "name": "mindarchive",
-  "version": "0.1.0",
+  "version": "1.2.0",
   "description": "Local-first AI conversation archive — your second brain for AI chats",
   "private": true,
   "type": "module",

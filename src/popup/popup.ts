@@ -6,7 +6,7 @@
 // background service worker.
 // ============================================================
 
-import type { CaptureResult } from "@/core/types";
+import type { CaptureResult, ContentMessage, EventMessage } from "@/core/types";
 import type { HistoryLoadProgress } from "@/platforms/chatgpt/historyLoader";
 import { getAutoSave, setAutoSave, getAutoLoad, setAutoLoad } from "@/storage/export";
 
@@ -53,11 +53,12 @@ async function detectPlatform() {
 
   try {
     const response = await sendToActiveTab({ type: "DETECT_PLATFORM" });
+    const result = response as { detected?: boolean; platform?: { id: string; name: string } };
 
-    if (response?.detected && response.platform) {
-      platformBadge.textContent = response.platform.name;
+    if (result.detected && result.platform) {
+      platformBadge.textContent = result.platform.name;
       platformBadge.className = "badge badge--active";
-      updateStatus(`已连接到 ${response.platform.name} — 可以捕获对话`);
+      updateStatus(`已连接到 ${result.platform.name} — 可以捕获对话`);
       actionsSection.style.display = "flex";
       settingsSection.style.display = "flex";
       emptyState.style.display = "none";
@@ -117,15 +118,16 @@ captureBtn.addEventListener("click", async () => {
 
   try {
     const response = await sendToActiveTab({ type: "CAPTURE_CONVERSATION" });
+    const cap = response as unknown as CaptureResult & { error?: string };
 
-    if (response?.error) {
-      updateStatus(`错误: ${response.error}`, "error");
+    if (cap.error) {
+      updateStatus(`错误: ${cap.error}`, "error");
       captureBtn.disabled = false;
       captureBtn.textContent = "📥 捕获对话";
       return;
     }
 
-    lastCaptureResult = response as CaptureResult;
+    lastCaptureResult = cap as CaptureResult;
     showPreview(lastCaptureResult);
 
     updateStatus(
@@ -209,7 +211,7 @@ autoLoadToggle.addEventListener("change", async () => {
 
 // ─── Listen for real-time updates from content script ─────────
 
-chrome.runtime.onMessage.addListener((message) => {
+chrome.runtime.onMessage.addListener((message: EventMessage, _sender: chrome.runtime.MessageSender) => {
   if (message.type === "NEW_MESSAGES" && message.payload) {
     updateStatus(
       `检测到 ${message.payload.count} 条新消息 (共 ${message.payload.total} 条)`,
@@ -218,7 +220,7 @@ chrome.runtime.onMessage.addListener((message) => {
   }
 
   if (message.type === "HISTORY_LOAD_PROGRESS" && message.payload) {
-    handleLoadProgress(message.payload as HistoryLoadProgress);
+    handleLoadProgress(message.payload);
   }
 
   if (message.type === "HISTORY_LOAD_COMPLETE") {
@@ -294,11 +296,11 @@ function waitForHistoryLoadComplete(timeoutMs = 120_000): Promise<number> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("timeout")), timeoutMs);
 
-    const handler = (message: { type?: string; messageCount?: number }) => {
-      if (message.type === "HISTORY_LOAD_COMPLETE") {
+    const handler = (msg: EventMessage, _sender: chrome.runtime.MessageSender) => {
+    if (msg.type === "HISTORY_LOAD_COMPLETE") {
         clearTimeout(timer);
         chrome.runtime.onMessage.removeListener(handler);
-        resolve(message.messageCount ?? 0);
+        resolve(msg.messageCount ?? 0);
       }
     };
 
@@ -306,9 +308,9 @@ function waitForHistoryLoadComplete(timeoutMs = 120_000): Promise<number> {
   });
 }
 
-async function sendToActiveTab(message: any): Promise<any> {
+async function sendToActiveTab(message: ContentMessage): Promise<Record<string, unknown>> {
   return new Promise((resolve) => {
-    chrome.runtime.sendMessage(message, (response) => {
+    chrome.runtime.sendMessage(message, (response: Record<string, unknown>) => {
       if (chrome.runtime.lastError) {
         resolve({ error: chrome.runtime.lastError.message });
       } else {

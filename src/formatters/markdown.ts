@@ -69,7 +69,7 @@ export function formatConversation(conversation: Conversation): string {
   lines.push("---");
   lines.push("");
   lines.push(
-    `*Archived with [MindArchive](https://github.com/mindarchive) — your second brain for AI conversations.*`
+    `*Archived with [MindArchive](https://github.com/EuniceAllen/mindarchive) — your second brain for AI conversations.*`
   );
 
   return lines.join("\n");
