@@ -21,10 +21,6 @@
 
     <!-- Main Actions -->
     <section id="actions" class="actions" style="display: none;">
-      <button id="loadHistoryBtn" class="btn btn--loader btn--full"
-              title="该功能当前无法使用，计划在后续版本中优化">
-        ⬆ 加载完整对话
-      </button>
       <div class="actions-row">
         <button id="captureBtn" class="btn btn--primary">
           📥 捕获对话
@@ -52,17 +48,22 @@
       <div id="previewContent" class="preview-content"></div>
     </section>
 
-    <!-- Settings -->
-    <section id="settingsSection" class="settings" style="display: none;">
-      <div class="settings-header">⚙️ 设置</div>
-      <label class="toggle">
-        <input type="checkbox" id="autoLoadToggle" />
-        <span class="toggle-label">捕获前自动加载完整历史</span>
-      </label>
-      <label class="toggle">
-        <input type="checkbox" id="autoSaveToggle" />
-        <span class="toggle-label">自动保存到本地存储</span>
-      </label>
+
+
+    <!-- DeepSeek One-Time Auth -->
+    <section id="deepseekAuth" class="deepseek-auth" style="display: none;">
+      <div class="deepseek-auth-header">🔐 DeepSeek 需要一次性授权</div>
+      <ol class="deepseek-auth-steps">
+        <li>按 <kbd>F12</kbd> 打开开发者工具 → <b>Network</b> 标签</li>
+        <li>找到 <code>history_messages</code> 请求 → 右键 → <b>Copy as fetch</b></li>
+        <li>粘贴到下方输入框 → 点击确认</li>
+      </ol>
+      <textarea id="deepseekFetchCode" class="deepseek-auth-textarea"
+        placeholder="粘贴 fetch(...) 代码到这里" rows="4"></textarea>
+      <button id="deepseekAuthConfirm" class="btn btn--primary btn--full">
+        确认并提取对话
+      </button>
+      <span id="deepseekAuthError" class="deepseek-auth-error" style="display: none;"></span>
     </section>
 
     <!-- Empty state -->
@@ -72,7 +73,7 @@
 
     <!-- Footer -->
     <footer class="footer">
-      <span>v0.1.0 — 本地优先 · 隐私至上</span>
+      <span>2.0</span>
     </footer>
   </div>
 

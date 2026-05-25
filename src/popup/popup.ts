@@ -8,7 +8,28 @@
 
 import type { CaptureResult, ContentMessage, EventMessage } from "@/core/types";
 import type { HistoryLoadProgress } from "@/platforms/chatgpt/historyLoader";
-import { getAutoSave, setAutoSave, getAutoLoad, setAutoLoad } from "@/storage/export";
+// ─── DeepSeek Auth ───────────────────────────────────────────
+
+function parseFetchCode(code: string): Record<string, string> | null {
+  const headers: Record<string, string> = {};
+  const headerMatches = code.matchAll(/"([\w-]+)":\s*"([^"]+)"/g);
+  for (const match of headerMatches) {
+    headers[match[1]] = match[2];
+  }
+  if (!headers["authorization"] && !headers["Authorization"]) return null;
+  return headers;
+}
+
+async function storeAndSendHeaders(headers: Record<string, string>): Promise<boolean> {
+  await chrome.storage.session.set({ deepseek_headers: headers });
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id) return false;
+  await chrome.tabs.sendMessage(tab.id, {
+    type: "DEEPSEEK_USE_HEADERS",
+    headers,
+  });
+  return true;
+}
 
 // ─── DOM References ───────────────────────────────────────────
 
@@ -16,7 +37,6 @@ const platformBadge = document.getElementById("platformBadge")!;
 const statusText = document.getElementById("statusText")!;
 const statusBar = document.getElementById("statusBar")!;
 const actionsSection = document.getElementById("actions")!;
-const loadHistoryBtn = document.getElementById("loadHistoryBtn")! as HTMLButtonElement;
 const captureBtn = document.getElementById("captureBtn")! as HTMLButtonElement;
 const exportBtn = document.getElementById("exportBtn")! as HTMLButtonElement;
 const loadProgress = document.getElementById("loadProgress")!;
@@ -26,10 +46,11 @@ const previewSection = document.getElementById("preview")!;
 const previewTitle = document.getElementById("previewTitle")!;
 const previewCount = document.getElementById("previewCount")!;
 const previewContent = document.getElementById("previewContent")!;
-const autoLoadToggle = document.getElementById("autoLoadToggle")! as HTMLInputElement;
-const autoSaveToggle = document.getElementById("autoSaveToggle")! as HTMLInputElement;
-const settingsSection = document.getElementById("settingsSection")!;
 const emptyState = document.getElementById("emptyState")!;
+const deepseekAuthSection = document.getElementById("deepseekAuth")!;
+const deepseekFetchCode = document.getElementById("deepseekFetchCode")! as HTMLTextAreaElement;
+const deepseekAuthConfirm = document.getElementById("deepseekAuthConfirm")! as HTMLButtonElement;
+const deepseekAuthError = document.getElementById("deepseekAuthError")!;
 
 // ─── State ────────────────────────────────────────────────────
 
@@ -38,11 +59,6 @@ let lastCaptureResult: CaptureResult | null = null;
 // ─── Initialization ───────────────────────────────────────────
 
 document.addEventListener("DOMContentLoaded", async () => {
-  // Load auto-save & auto-load preferences
-  autoSaveToggle.checked = await getAutoSave();
-  autoLoadToggle.checked = await getAutoLoad();
-
-  // Detect platform on the active tab
   await detectPlatform();
 });
 
@@ -60,14 +76,12 @@ async function detectPlatform() {
       platformBadge.className = "badge badge--active";
       updateStatus(`已连接到 ${result.platform.name} — 可以捕获对话`);
       actionsSection.style.display = "flex";
-      settingsSection.style.display = "flex";
       emptyState.style.display = "none";
     } else {
       platformBadge.textContent = "未检测到";
       platformBadge.className = "badge badge--inactive";
       updateStatus("未检测到支持的 AI 平台");
       actionsSection.style.display = "none";
-      settingsSection.style.display = "none";
       emptyState.style.display = "block";
     }
   } catch (err) {
@@ -75,7 +89,6 @@ async function detectPlatform() {
     platformBadge.className = "badge badge--inactive";
     updateStatus("无法连接到页面，请刷新后重试");
     actionsSection.style.display = "none";
-    settingsSection.style.display = "none";
     emptyState.style.display = "block";
   }
 }
@@ -86,34 +99,6 @@ captureBtn.addEventListener("click", async () => {
   captureBtn.disabled = true;
   captureBtn.textContent = "⏳ 捕获中…";
 
-  // If auto-load is enabled, trigger full history loading first
-  if (autoLoadToggle.checked) {
-    updateStatus("设置要求先加载完整历史…");
-
-    loadHistoryBtn.disabled = true;
-    loadHistoryBtn.textContent = "⏳ 加载中…";
-    loadHistoryBtn.classList.add("is-loading");
-    loadProgress.style.display = "flex";
-    progressFill.className = "progress-fill is-indeterminate";
-    progressText.textContent = "正在加载历史消息…";
-    progressText.className = "progress-text";
-    setLoadingState(true);
-
-    try {
-      await sendToActiveTab({ type: "LOAD_FULL_HISTORY" });
-      // Wait for HISTORY_LOAD_COMPLETE from content script
-      await waitForHistoryLoadComplete();
-    } catch {
-      updateStatus("历史加载失败，继续尝试捕获当前可见消息…", "info");
-    }
-
-    // Reset load button state
-    loadHistoryBtn.disabled = false;
-    loadHistoryBtn.textContent = "⬆ 加载完整对话";
-    loadHistoryBtn.classList.remove("is-loading");
-    setLoadingState(false);
-  }
-
   updateStatus("正在从页面提取对话…");
 
   try {
@@ -121,6 +106,18 @@ captureBtn.addEventListener("click", async () => {
     const cap = response as unknown as CaptureResult & { error?: string };
 
     if (cap.error) {
+      // DeepSeek needs auth — show one-time paste UI
+      if (cap.error.includes("NEEDS_REFRESH") || cap.error.includes("刷新")) {
+        updateStatus("DeepSeek 需要授权以提取完整对话", "info");
+        actionsSection.style.display = "none";
+        deepseekAuthSection.style.display = "flex";
+        deepseekFetchCode.value = "";
+        deepseekAuthError.style.display = "none";
+        captureBtn.disabled = false;
+        captureBtn.textContent = "📥 捕获对话";
+        return;
+      }
+
       updateStatus(`错误: ${cap.error}`, "error");
       captureBtn.disabled = false;
       captureBtn.textContent = "📥 捕获对话";
@@ -144,29 +141,44 @@ captureBtn.addEventListener("click", async () => {
   captureBtn.textContent = "📥 捕获对话";
 });
 
-// ─── Load Full History ───────────────────────────────────────
+// ─── DeepSeek Auth Confirm ────────────────────────────────────
 
-loadHistoryBtn.addEventListener("click", async () => {
-  setLoadingState(true);
-  updateStatus("正在加载历史消息…");
-
-  loadHistoryBtn.disabled = true;
-  loadHistoryBtn.textContent = "⏳ 加载中…";
-  loadHistoryBtn.classList.add("is-loading");
-
-  loadProgress.style.display = "flex";
-  progressFill.className = "progress-fill is-indeterminate";
-  progressText.textContent = "正在加载历史消息…";
-  progressText.className = "progress-text";
-
-  try {
-    await sendToActiveTab({ type: "LOAD_FULL_HISTORY" });
-    // Completion is handled by HISTORY_LOAD_COMPLETE message listener
-  } catch (err) {
-    setLoadingState(false);
-    updateStatus("加载失败，请重试", "error");
+deepseekAuthConfirm.addEventListener("click", async () => {
+  const code = deepseekFetchCode.value.trim();
+  if (!code) {
+    deepseekAuthError.textContent = "请粘贴 fetch(...) 代码";
+    deepseekAuthError.style.display = "block";
+    return;
   }
+
+  const headers = parseFetchCode(code);
+  if (!headers) {
+    deepseekAuthError.textContent = "未找到 authorization header，请确认复制的是完整的 fetch 代码";
+    deepseekAuthError.style.display = "block";
+    return;
+  }
+
+  deepseekAuthConfirm.disabled = true;
+  deepseekAuthConfirm.textContent = "⏳ 发送中…";
+  deepseekAuthError.style.display = "none";
+
+  const sent = await storeAndSendHeaders(headers);
+  if (sent) {
+    updateStatus("授权信息已发送，正在提取对话…", "info");
+    deepseekAuthSection.style.display = "none";
+    actionsSection.style.display = "flex";
+    // Auto-trigger capture with stored headers
+    setTimeout(() => captureBtn.click(), 500);
+  } else {
+    deepseekAuthError.textContent = "发送失败，请刷新页面后重试";
+    deepseekAuthError.style.display = "block";
+  }
+
+  deepseekAuthConfirm.disabled = false;
+  deepseekAuthConfirm.textContent = "确认并提取对话";
 });
+
+
 
 // ─── Export ───────────────────────────────────────────────────
 
@@ -187,27 +199,7 @@ exportBtn.addEventListener("click", async () => {
   exportBtn.textContent = "💾 导出 Markdown";
 });
 
-// ─── Auto-save Toggle ─────────────────────────────────────────
 
-autoSaveToggle.addEventListener("change", async () => {
-  await setAutoSave(autoSaveToggle.checked);
-  updateStatus(
-    autoSaveToggle.checked ? "自动保存已开启" : "自动保存已关闭",
-    "info"
-  );
-});
-
-// ─── Auto-load Toggle ─────────────────────────────────────────
-
-autoLoadToggle.addEventListener("change", async () => {
-  await setAutoLoad(autoLoadToggle.checked);
-  updateStatus(
-    autoLoadToggle.checked
-      ? "自动加载已开启 — 捕获前将自动加载完整历史"
-      : "自动加载已关闭 — 仅捕获当前可见消息",
-    "info"
-  );
-});
 
 // ─── Listen for real-time updates from content script ─────────
 
@@ -263,9 +255,6 @@ function handleLoadProgress(progress: HistoryLoadProgress) {
         ? "已到达对话顶部 — 完整对话加载完成 ✅"
         : "完整对话加载完成 ✅";
       progressText.className = "progress-text is-complete";
-      loadHistoryBtn.disabled = false;
-      loadHistoryBtn.textContent = "⬆ 加载完整对话";
-      loadHistoryBtn.classList.remove("is-loading");
       setLoadingState(false);
       break;
   }
@@ -287,26 +276,6 @@ function handleLoadComplete(messageCount: number) {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────
-
-/**
- * Returns a promise that resolves when HISTORY_LOAD_COMPLETE
- * is received from the content script (or rejects on timeout).
- */
-function waitForHistoryLoadComplete(timeoutMs = 120_000): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("timeout")), timeoutMs);
-
-    const handler = (msg: EventMessage, _sender: chrome.runtime.MessageSender) => {
-    if (msg.type === "HISTORY_LOAD_COMPLETE") {
-        clearTimeout(timer);
-        chrome.runtime.onMessage.removeListener(handler);
-        resolve(msg.messageCount ?? 0);
-      }
-    };
-
-    chrome.runtime.onMessage.addListener(handler);
-  });
-}
 
 async function sendToActiveTab(message: ContentMessage): Promise<Record<string, unknown>> {
   return new Promise((resolve) => {

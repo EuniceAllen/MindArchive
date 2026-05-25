@@ -1,19 +1,26 @@
 // ============================================================
 // MindArchive — DeepSeek Message Extractor
 // ============================================================
-// Two extraction strategies (API preferred, DOM fallback):
+// Two extraction strategies (cache preferred, DOM fallback):
 //
-// ## API extraction (primary)
-//   Recursive pagination: loop with count=50 until exhausted.
-//   Detects cursor fields (next_seq_id / cursor / min_seq_id).
-//   Deduplicates by message_id, sorts chronologically.
+// ## Cache extraction (primary)
+//   Reads window.__mindarchive_deepseek_cache__ populated by
+//   the request interceptor (injected at document_start).
+//   Zero network requests — the page's own API calls are
+//   intercepted and accumulated.
 //
 // ## DOM extraction (fallback)
 //   All messages: .ds-message
 //   AI marker:    .ds-assistant-message-main-content
 // ============================================================
 
-import type { Message, DeepSeekApiResponse, DeepSeekApiMessage } from "@/core/types";
+import type { Message, DeepSeekApiMessage } from "@/core/types";
+
+const BRIDGE_CACHE_KEY = "__mindarchive_bridge_cache__";
+
+function getCachedData(): any {
+  return (window as any)[BRIDGE_CACHE_KEY] || null;
+}
 
 // ─── Confirmed Selectors ────────────────────────────────────
 
@@ -84,6 +91,9 @@ function extractCleanText(el: Element): string {
 
   fenceCode(clone);
 
+  // Preserve images as Markdown placeholders before text extraction
+  preserveImages(clone);
+
   const text = (clone.textContent || "").replace(/\n{3,}/g, "\n\n").trim();
   return text.length < 3 ? "" : text;
 }
@@ -110,168 +120,142 @@ function extractTimestamp(el: Element): string | undefined {
   return t?.getAttribute("datetime") || t?.textContent?.trim() || undefined;
 }
 
-// ============================================================
-// API Extraction (primary strategy)
-// ============================================================
-// Fetches the full conversation from chat.deepseek.com's
-// internal API. Returns raw markdown, avoiding DOM issues.
-
 /**
- * Fetch the full conversation from DeepSeek's internal API
- * with recursive pagination.
- *
- * DeepSeek paginates history_messages (default 50 per page).
- * This function loops until no more pages or exhausted cursor,
- * then deduplicates and sorts all messages.
- *
- * DOM fallback ONLY on HTTP/auth/malformed response — NOT on
- * empty chat_messages or missing cursor (valid pagination end).
+ * Replace all <img> elements with Markdown ![alt](src) text nodes
+ * so they survive textContent extraction as readable placeholders.
  */
+function preserveImages(root: HTMLElement): void {
+  const imgs = Array.from(root.querySelectorAll("img"));
+  for (const img of imgs) {
+    const src = img.getAttribute("src") || img.getAttribute("data-src") || "";
+    const alt = img.getAttribute("alt") || img.getAttribute("title") || "Image";
+
+    let placeholder: string;
+    if (src && (src.startsWith("http") || src.startsWith("blob:") || src.startsWith("data:"))) {
+      placeholder = `![${alt}](${src})`;
+    } else if (src) {
+      placeholder = `![${alt}]({{${src}}})`;
+    } else {
+      placeholder = `[🖼 ${alt}]`;
+    }
+
+    const span = document.createElement("span");
+    span.textContent = placeholder;
+    img.parentNode?.replaceChild(span, img);
+  }
+
+  // Also handle <figure> wrappers
+  const figures = Array.from(root.querySelectorAll("figure"));
+  for (const fig of figures) {
+    const img = fig.querySelector("img");
+    const figcaption = fig.querySelector("figcaption");
+    if (img && (fig.childElementCount === 1 || (fig.childElementCount === 2 && figcaption))) {
+      const src = img.getAttribute("src") || img.getAttribute("data-src") || "";
+      const alt = figcaption?.textContent?.trim() || img.getAttribute("alt") || "Image";
+      let placeholder: string;
+      if (src && (src.startsWith("http") || src.startsWith("blob:") || src.startsWith("data:"))) {
+        placeholder = `![${alt}](${src})`;
+      } else if (src) {
+        placeholder = `![${alt}]({{${src}}})`;
+      } else {
+        placeholder = `[🖼 ${alt}]`;
+      }
+      const span = document.createElement("span");
+      span.textContent = placeholder;
+      fig.parentNode?.replaceChild(span, fig);
+    }
+  }
+}
+
+// ============================================================
+// Cache Wait (primary strategy)
+// ============================================================
+// Three-tier flow: immediate cache → storage check → wait.
+
+function cacheToResult(cache: {
+  messages: DeepSeekApiMessage[];
+  session: { title?: string; model?: string } | null;
+}): { messages: Message[]; title: string; model: string } {
+  return {
+    messages: convertMessagesFromList(cache.messages),
+    title: cache.session?.title || extractTitle(),
+    model: cache.session?.model || "",
+  };
+}
+
+async function waitForPostMessage(timeoutMs = 10000): Promise<{
+  messages: DeepSeekApiMessage[];
+  session: { title?: string; model?: string } | null;
+} | null> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      console.warn("[MindArchive] DeepSeek: cache update timed out");
+      resolve(null);
+    }, timeoutMs);
+
+    function handler(event: MessageEvent) {
+      if (event.source !== window) return;
+      if (event.data?.type === "__mindarchive_cache_update__") {
+        clearTimeout(timer);
+        window.removeEventListener("message", handler);
+        const cache = event.data.payload as {
+          messages: DeepSeekApiMessage[];
+          session: { title?: string; model?: string } | null;
+        } | null;
+        resolve(cache?.messages?.length ? cache : null);
+      }
+    }
+
+    window.addEventListener("message", handler);
+  });
+}
+
 export async function fetchConversationFromApi(): Promise<{
   messages: Message[];
   title: string;
   model: string;
+  needsRefresh?: boolean;
 } | null> {
+  // 1. Immediate cache check — data may have arrived before we were called
+  const immediate = getCachedData();
+  if (immediate?.messages?.length > 0) {
+    console.log("[MindArchive] DeepSeek: cache found immediately, returning");
+    return cacheToResult(immediate);
+  }
+
+  // 2. Check for stored headers — no headers = instant needsRefresh
   try {
-    console.log("[MindArchive] DeepSeek API: fetchConversationFromApi called, URL:", window.location.pathname);
-
-    const convId = getDeepSeekConversationId();
-    console.log("[MindArchive] DeepSeek API: convId =", convId);
-    if (!convId) {
-      console.warn("[MindArchive] DeepSeek API: no conversation_id in URL");
-      return null;
+    const stored = await chrome.storage.session.get("deepseek_headers");
+    if (!stored.deepseek_headers) {
+      console.warn("[MindArchive] DeepSeek: no stored headers — needs refresh");
+      return { messages: [], title: "", model: "", needsRefresh: true };
     }
 
-    const allMessages: DeepSeekApiMessage[] = [];
-    const seen = new Set<number>();
-    let cursor: Cursor | null = null;
-    let page = 0;
-    let sessionTitle: string | undefined;
-    let sessionModel: string | undefined;
-
-    while (true) {
-      page++;
-
-      // Build URL with cursor if present
-      let apiUrl = `/api/v0/chat/history_messages?chat_session_id=${convId}&cache_version=0&count=50`;
-      if (cursor) {
-        apiUrl += `&${cursor.param}=${cursor.value}`;
-      }
-
-      console.log(`[MindArchive] DeepSeek API: page ${page}, cursor=${cursor ? `${cursor.param}=${cursor.value}` : "none"}`);
-
-      const resp = await fetch(apiUrl, { credentials: "include" });
-      if (!resp.ok) {
-        // HTTP failure → DOM fallback
-        console.warn(`[MindArchive] DeepSeek API page ${page}: HTTP ${resp.status}`);
-        if (page === 1) return null; // first page failed → full fallback
-        break; // subsequent page failed → use what we have
-      }
-
-      const data: DeepSeekApiResponse = await resp.json();
-
-      // null data during pagination is normal exhaustion — don't fallback to DOM
-      if (!data?.data?.biz_data) {
-        console.log(`[MindArchive] DeepSeek API page ${page}: null data (pagination exhausted)`);
-        break;
-      }
-
-      const biz = data.data.biz_data;
-      const msgs = biz.chat_messages || [];
-
-      // Capture session metadata from first page
-      if (page === 1 && biz.chat_session) {
-        sessionTitle = biz.chat_session.title;
-        sessionModel = biz.chat_session.model;
-      }
-
-      console.log(`[MindArchive] DeepSeek API page ${page}: got ${msgs.length} messages`);
-
-      if (msgs.length === 0) {
-        console.log(`[MindArchive] DeepSeek API page ${page}: empty page, stopping`);
-        break;
-      }
-
-      // Deduplicate and accumulate
-      let newCount = 0;
-      for (const msg of msgs) {
-        if (!seen.has(msg.message_id)) {
-          seen.add(msg.message_id);
-          allMessages.push(msg);
-          newCount++;
-        }
-      }
-      console.log(`[MindArchive] DeepSeek API page ${page}: ${newCount} new (total: ${allMessages.length})`);
-
-      // Detect pagination end
-      if (biz.has_more === false) {
-        console.log("[MindArchive] DeepSeek API: has_more=false, stopping");
-        break;
-      }
-
-      if (msgs.length < 50) {
-        console.log(`[MindArchive] DeepSeek API page ${page}: returned ${msgs.length} < 50, stopping`);
-        break;
-      }
-
-      // Extract cursor for next page
-      const nextCursor = extractCursor(biz);
-      if (!nextCursor) {
-        console.log("[MindArchive] DeepSeek API: no cursor found, stopping");
-        break;
-      }
-
-      cursor = nextCursor;
-    }
-
-    // Convert accumulated messages
-    const messages = convertMessagesFromList(allMessages);
-    const title = sessionTitle || extractTitle();
-    const model = sessionModel || "";
-
-    console.log(
-      `[MindArchive] DeepSeek API: done — ${messages.length} total messages across ${page} pages`
+    // 3. Headers exist — trigger fetch in page context and wait
+    console.log("[MindArchive] DeepSeek: dispatching use_headers and waiting...");
+    window.postMessage(
+      { type: "__mindarchive_use_headers__", headers: stored.deepseek_headers },
+      "*"
     );
 
-    return { messages, title, model };
-  } catch (err) {
-    console.error("[MindArchive] DeepSeek API: fetch failed", err);
-    return null;
-  }
-}
-
-// ─── Pagination Helpers ─────────────────────────────────────
-
-/** Pagination cursor: param name + value for next request */
-interface Cursor {
-  param: string;
-  value: string;
-}
-
-/** Try known cursor field names in the biz_data object */
-function extractCursor(biz: Record<string, unknown>): Cursor | null {
-  // Priority order: try known pagination field names
-  const candidates: [string, string][] = [
-    ["next_seq_id", "seq_id"],
-    ["cursor", "cursor"],
-    ["min_seq_id", "seq_id"],
-    ["seq_id", "seq_id"],
-  ];
-
-  for (const [field, param] of candidates) {
-    const val = biz[field];
-    if (val !== undefined && val !== null && val !== "") {
-      return { param, value: String(val) };
+    const cache = await waitForPostMessage();
+    if (!cache) {
+      return { messages: [], title: "", model: "", needsRefresh: true };
     }
+
+    const result = cacheToResult(cache);
+    console.log(
+      `[MindArchive] DeepSeek: extracted ${result.messages.length} messages`
+    );
+
+    return result;
+  } catch (err) {
+    console.error("[MindArchive] DeepSeek: storage access failed", err);
+    return { messages: [], title: "", model: "", needsRefresh: true };
   }
-
-  return null;
 }
 
-/** Extract conversation_id from URL: /a/chat/s/{id} */
-function getDeepSeekConversationId(): string | null {
-  return window.location.pathname.split("/").pop() || null;
-}
+// ─── Message Conversion ─────────────────────────────────────
 
 /** Convert DeepSeekApiMessage[] → Message[] (sorted, deduplicated) */
 function convertMessagesFromList(rawMessages: DeepSeekApiMessage[]): Message[] {
@@ -280,8 +264,20 @@ function convertMessagesFromList(rawMessages: DeepSeekApiMessage[]): Message[] {
   return rawMessages
     .sort((a, b) => a.message_id - b.message_id)
     .map((msg) => {
-      const role: Message["role"] = msg.role === "user" ? "user" : "assistant";
-      const content = (msg.content || "").trim();
+      // Role mapping: uppercase API → lowercase output
+      const role: Message["role"] =
+        msg.role === "USER" ? "user" : "assistant";
+
+      // Extract content from fragments (preferred) or direct field
+      let content = "";
+      if (msg.fragments && msg.fragments.length > 0) {
+        const fragmentType = msg.role === "USER" ? "REQUEST" : "RESPONSE";
+        const target = msg.fragments.find((f) => f.type === fragmentType);
+        content = (target?.content ?? "").trim();
+      } else {
+        content = (msg.content || "").trim();
+      }
+
       const timestamp = msg.created_at
         ? new Date(msg.created_at * 1000).toISOString()
         : undefined;

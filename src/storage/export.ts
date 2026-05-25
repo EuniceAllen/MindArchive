@@ -14,9 +14,6 @@ const STORAGE_KEY = "mindarchive_conversations";
 /** Key for auto-save preference */
 const AUTOSAVE_KEY = "mindarchive_autosave";
 
-/** Key for auto-load preference */
-const AUTOLOAD_KEY = "mindarchive_autoload";
-
 // ─── Chrome Storage ──────────────────────────────────────────
 
 /**
@@ -57,17 +54,6 @@ export async function getAutoSave(): Promise<boolean> {
 
 export async function setAutoSave(enabled: boolean): Promise<void> {
   await chrome.storage.local.set({ [AUTOSAVE_KEY]: enabled });
-}
-
-// ─── Auto-load Preference ────────────────────────────────────
-
-export async function getAutoLoad(): Promise<boolean> {
-  const result = await chrome.storage.local.get(AUTOLOAD_KEY);
-  return result[AUTOLOAD_KEY] ?? false;
-}
-
-export async function setAutoLoad(enabled: boolean): Promise<void> {
-  await chrome.storage.local.set({ [AUTOLOAD_KEY]: enabled });
 }
 
 // ─── File Export ─────────────────────────────────────────────

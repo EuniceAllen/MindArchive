@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "MindArchive",
-  "version": "1.2.0",
+  "version": "2.0.0",
   "description": "Local-first AI conversation archive — preserve and organize your chats with ChatGPT, Claude, and more.",
   "icons": {
     "16": "public/icons/icon-16.png",
@@ -17,7 +17,7 @@
       "128": "public/icons/icon-128.png"
     }
   },
-  "permissions": ["storage", "activeTab"],
+  "permissions": ["storage"],
   "host_permissions": [
     "https://chatgpt.com/*",
     "https://claude.ai/*",
@@ -30,12 +30,51 @@
   "content_scripts": [
     {
       "matches": [
+        "https://chatgpt.com/*"
+      ],
+      "js": ["src/platforms/chatgpt/interceptor.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
         "https://chatgpt.com/*",
-        "https://claude.ai/*",
+        "https://claude.ai/*"
+      ],
+      "js": ["src/content/index.ts"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://chat.deepseek.com/*"
+      ],
+      "js": ["src/platforms/deepseek/interceptor-page.ts"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://chat.deepseek.com/*"
+      ],
+      "js": ["src/platforms/deepseek/interceptor.ts"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
         "https://chat.deepseek.com/*"
       ],
       "js": ["src/content/index.ts"],
       "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["assets/*"],
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://claude.ai/*",
+        "https://chat.deepseek.com/*"
+      ]
     }
   ]
 }

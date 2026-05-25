@@ -132,7 +132,9 @@ function walkDFS(parent: Element, blocks: ContentBlock[]): void {
 
     // ── p: serialize full innerText (inline <code> merged) ──
     if (tag === "p") {
-      const text = (child as HTMLElement).innerText?.trim() || "";
+      const clone = child.cloneNode(true) as HTMLElement;
+      preserveImages(clone);
+      const text = clone.innerText?.trim() || "";
       if (text) {
         blocks.push({ type: "text", content: text });
       }
@@ -165,6 +167,28 @@ function walkDFS(parent: Element, blocks: ContentBlock[]): void {
       const text = (child as HTMLElement).innerText?.trim() || "";
       if (text) {
         blocks.push({ type: "blockquote", content: text });
+      }
+      continue;
+    }
+
+    // ── img / figure → image placeholder ────────────────────
+    if (tag === "img") {
+      const placeholder = imgToPlaceholder(child as HTMLImageElement);
+      if (placeholder) {
+        blocks.push({ type: "text", content: placeholder });
+      }
+      continue;
+    }
+
+    if (tag === "figure") {
+      const img = child.querySelector("img");
+      const figcaption = child.querySelector("figcaption");
+      const alt = figcaption?.textContent?.trim() || img?.getAttribute("alt") || "Image";
+      if (img) {
+        const placeholder = imgToPlaceholder(img, alt);
+        if (placeholder) {
+          blocks.push({ type: "text", content: placeholder });
+        }
       }
       continue;
     }
@@ -241,6 +265,35 @@ function sortByDOM<T extends { el: Element }>(items: T[]): T[] {
     if (pos & Node.DOCUMENT_POSITION_PRECEDING) return 1;
     return 0;
   });
+}
+
+/**
+ * Convert an <img> element to a Markdown placeholder string.
+ */
+function imgToPlaceholder(img: HTMLImageElement, overrideAlt?: string): string {
+  const src = img.getAttribute("src") || img.getAttribute("data-src") || "";
+  const alt = overrideAlt || img.getAttribute("alt") || img.getAttribute("title") || "Image";
+
+  if (src && (src.startsWith("http") || src.startsWith("blob:") || src.startsWith("data:"))) {
+    return `![${alt}](${src})`;
+  } else if (src) {
+    return `![${alt}]({{${src}}})`;
+  }
+  return `[🖼 ${alt}]`;
+}
+
+/**
+ * Replace <img> elements inside a cloned container with text
+ * placeholders so innerText extraction preserves them.
+ */
+function preserveImages(root: HTMLElement): void {
+  const imgs = Array.from(root.querySelectorAll("img"));
+  for (const img of imgs) {
+    const placeholder = imgToPlaceholder(img);
+    const span = document.createElement("span");
+    span.textContent = placeholder;
+    img.parentNode?.replaceChild(span, img);
+  }
 }
 
 /** Short preview for debug logging */

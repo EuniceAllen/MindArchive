@@ -13,7 +13,6 @@ import { detectPlatform } from "@/platforms/registry";
 import { downloadConversation, createCaptureResult, saveToStorage, getAutoSave } from "@/storage/export";
 import type { PlatformAdapter } from "@/platforms/base";
 import type { CaptureResult, ContentMessage, EventMessage } from "@/core/types";
-import type { HistoryLoadProgress } from "@/platforms/chatgpt/historyLoader";
 
 // ─── State ───────────────────────────────────────────────────
 
@@ -24,7 +23,10 @@ let capturedMessages = 0;
 // ─── Message Handlers ────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((message: ContentMessage, _sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) => {
-  handleMessage(message).then(sendResponse);
+  handleMessage(message).then(sendResponse).catch((err) => {
+    console.error("[MindArchive] handleMessage error:", err);
+    sendResponse({ error: String(err) });
+  });
   return true; // Keep channel open for async response
 });
 
@@ -50,6 +52,7 @@ async function handleMessage(message: ContentMessage): Promise<Record<string, un
 
     case "LOAD_FULL_HISTORY":
       return loadFullHistory();
+
   }
 
   // Exhaustive check — should never reach here
@@ -79,6 +82,15 @@ async function captureCurrent(): Promise<CaptureResult | { error: string }> {
   }
 
   const conversation = await activeAdapter.captureConversation();
+
+  // DeepSeek needs page refresh to get full conversation
+  if (conversation.error === "NEEDS_REFRESH") {
+    return {
+      error:
+        "DeepSeek 需要刷新页面才能提取完整对话。\n请按 F5 刷新后重新点击捕获。",
+    };
+  }
+
   capturedMessages = conversation.messages.length;
 
   // Check auto-save setting (awaited properly)
@@ -155,27 +167,17 @@ async function loadFullHistory(): Promise<{ success: boolean; messageCount?: num
     return { success: false, error: "No platform detected." };
   }
 
-  // ChatGPT has a specialized loader (virtualized list, lazy batches)
+  // ChatGPT: API in captureConversation already gets everything.
+  // No need for scroll-based history loading — just report current state.
   if (activeAdapter.id === "chatgpt") {
-    try {
-      const { loadEntireConversationHistory } = await import(
-        "@/platforms/chatgpt/historyLoader"
-      );
-      const finalCount = await loadEntireConversationHistory((progress) => {
-        chrome.runtime.sendMessage({
-          type: "HISTORY_LOAD_PROGRESS", payload: progress,
-        }).catch(() => {});
-      });
+    const messages = activeAdapter.extractMessages();
+    const count = messages.length;
 
-      chrome.runtime.sendMessage({
-        type: "HISTORY_LOAD_COMPLETE", messageCount: finalCount,
-      }).catch(() => {});
+    chrome.runtime.sendMessage({
+      type: "HISTORY_LOAD_COMPLETE", messageCount: count,
+    }).catch(() => {});
 
-      return { success: true, messageCount: finalCount };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return { success: false, error: msg };
-    }
+    return { success: true, messageCount: count };
   }
 
   // Other platforms: find scrollable container, scroll up progressively

@@ -98,14 +98,4 @@ async function relayToActiveTab(message: ContentMessage | EventMessage): Promise
   }
 }
 
-// ─── Context Menu (future: right-click to capture) ───────────
-// Disabled for MVP — uncomment when ready.
-
-// chrome.contextMenus.create({
-//   id: "capture-conversation",
-//   title: "Archive this conversation with MindArchive",
-//   contexts: ["page"],
-//   documentUrlPatterns: ["https://chatgpt.com/*", "https://claude.ai/*"],
-// });
-
 console.log("[MindArchive] Background service worker started.");

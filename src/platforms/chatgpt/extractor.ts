@@ -1,19 +1,21 @@
 // ============================================================
 // MindArchive — ChatGPT Message Extractor
 // ============================================================
-// Responsible for reading ALL visible messages from the
-// ChatGPT DOM and converting them to structured Message[].
+// Two extraction strategies (API preferred, DOM fallback):
 //
-// ## Strategy (in priority order)
+// ## API extraction (primary)
+//   Reads window.__mindarchive_chatgpt_cache__ populated by
+//   the MAIN-world interceptor (interceptor.js) which hooks
+//   the page's own fetch() to capture /backend-api/conversation/.
+//   Zero manual network requests — passively intercepts the
+//   page's own API call.
 //
-// 1. [data-message-author-role] — the most stable semantic
-//    attribute ChatGPT uses. Present on every message wrapper.
-//    Values: "user" | "assistant"
-//
-// 2. Fallback: scan for <article> conversation turns
-//    (older ChatGPT UI, kept for backward compatibility)
-//
-// 3. Last resort: heuristic scan of the main conversation area
+// ## DOM extraction (fallback)
+//   1. [data-message-author-role] — the most stable semantic
+//      attribute ChatGPT uses. Present on every message wrapper.
+//      Values: "user" | "assistant"
+//   2. Fallback: scan for <article> conversation turns
+//      (older ChatGPT UI, kept for backward compatibility)
 //
 // ## Why NOT hashed class names
 //
@@ -23,7 +25,26 @@
 // ============================================================
 
 import type { Message } from "@/core/types";
-import type { ExtractionResult } from "./types";
+import type { ExtractionResult, ChatGPTApiResponse, ChatGPTApiMessageNode, ChatGPTApiMessageMetadata } from "./types";
+
+// ─── Cross-World Cache Bridge ───────────────────────────────
+// The MAIN-world interceptor sets data on its own window, which
+// the isolated world CANNOT read directly. We bridge via postMessage:
+// interceptor → postMessage → this listener → isolated world's window.
+
+const CACHE_KEY = "__mindarchive_chatgpt_cache__";
+const CACHE_EVENT = "__mindarchive_chatgpt_cache_update__";
+
+// Register early — cache may arrive before fetchConversationFromApi() is called
+window.addEventListener("message", (event: MessageEvent) => {
+  if (event.source !== window) return;
+  if (event.data?.type === CACHE_EVENT && event.data?.payload) {
+    (window as unknown as Record<string, unknown>)[CACHE_KEY] = event.data.payload;
+  }
+  if (event.data?.type === "__mindarchive_chatgpt_cache_clear__") {
+    (window as unknown as Record<string, unknown>)[CACHE_KEY] = null;
+  }
+});
 
 // ─── Primary Selector ───────────────────────────────────────
 // [data-message-author-role] is the canonical semantic marker
@@ -341,6 +362,9 @@ function extractCleanText(container: Element): string {
     });
   }
 
+  // Preserve images as Markdown placeholders before text extraction
+  preserveImages(clone);
+
   // Get remaining text
   const text = (clone.textContent || "").trim();
 
@@ -368,9 +392,392 @@ function extractTimestamp(container: Element): string | undefined {
   return undefined;
 }
 
+/**
+ * Replace all <img> elements with Markdown ![alt](src) text nodes
+ * so they survive textContent extraction as readable placeholders.
+ */
+function preserveImages(root: HTMLElement): void {
+  const imgs = Array.from(root.querySelectorAll("img"));
+  for (const img of imgs) {
+    const src = img.getAttribute("src") || img.getAttribute("data-src") || "";
+    const alt = img.getAttribute("alt") || img.getAttribute("title") || "Image";
+
+    // Build a Markdown image placeholder
+    let placeholder: string;
+    if (src && (src.startsWith("http") || src.startsWith("blob:") || src.startsWith("data:"))) {
+      placeholder = `![${alt}](${src})`;
+    } else if (src) {
+      placeholder = `![${alt}]({{${src}}})`; // relative path — user can replace
+    } else {
+      placeholder = `[🖼 ${alt}]`;
+    }
+
+    const span = document.createElement("span");
+    span.textContent = placeholder;
+    img.parentNode?.replaceChild(span, img);
+  }
+
+  // Also handle <figure> wrappers that contain only an <img>
+  const figures = Array.from(root.querySelectorAll("figure"));
+  for (const fig of figures) {
+    const img = fig.querySelector("img");
+    const figcaption = fig.querySelector("figcaption");
+    if (img && (fig.childElementCount === 1 || (fig.childElementCount === 2 && figcaption))) {
+      const src = img.getAttribute("src") || img.getAttribute("data-src") || "";
+      const alt = figcaption?.textContent?.trim() || img.getAttribute("alt") || "Image";
+      let placeholder: string;
+      if (src && (src.startsWith("http") || src.startsWith("blob:") || src.startsWith("data:"))) {
+        placeholder = `![${alt}](${src})`;
+      } else if (src) {
+        placeholder = `![${alt}]({{${src}}})`;
+      } else {
+        placeholder = `[🖼 ${alt}]`;
+      }
+      const span = document.createElement("span");
+      span.textContent = placeholder;
+      fig.parentNode?.replaceChild(span, fig);
+    }
+  }
+}
+
+// ============================================================
+// API Extraction (primary strategy)
+// ============================================================
+// Reads conversation data from window.__mindarchive_chatgpt_cache__
+// which is bridged here from the MAIN-world interceptor via postMessage.
+
+function getCachedData(): ChatGPTApiResponse | null {
+  return (window as unknown as Record<string, unknown>)[CACHE_KEY] as ChatGPTApiResponse | null;
+}
+
+/**
+ * Try to get the conversation from the intercepted API cache.
+ *
+ * Three-tier flow:
+ *   1. Immediate cache check — data may have arrived before we were called
+ *   2. Wait for postMessage from interceptor (page may still be loading)
+ *   3. Timeout → return null (caller falls back to DOM)
+ */
+export async function fetchConversationFromApi(): Promise<{
+  messages: Message[];
+  title: string;
+  model: string;
+} | null> {
+  // 1. Immediate cache check
+  const immediate = getCachedData();
+  if (immediate?.mapping) {
+    console.log("[MindArchive] ChatGPT: cache found immediately, returning");
+    return convertCacheToResult(immediate);
+  }
+
+  // 2. Wait for interceptor to populate cache (page may still be loading)
+  console.log("[MindArchive] ChatGPT: cache empty, waiting for interceptor...");
+  const data = await waitForCache(5000);
+
+  if (data?.mapping) {
+    console.log("[MindArchive] ChatGPT: cache received via postMessage");
+    return convertCacheToResult(data);
+  }
+
+  console.warn("[MindArchive] ChatGPT: cache timed out — API unavailable");
+  return null;
+}
+
+// ─── Cache Wait ─────────────────────────────────────────────
+
+function waitForCache(timeoutMs: number): Promise<ChatGPTApiResponse | null> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      window.removeEventListener("message", handler);
+      resolve(null);
+    }, timeoutMs);
+
+    function handler(event: MessageEvent) {
+      if (event.source !== window) return;
+      if (event.data?.type === CACHE_EVENT) {
+        clearTimeout(timer);
+        window.removeEventListener("message", handler);
+        const payload = event.data.payload as ChatGPTApiResponse | null;
+        resolve(payload?.mapping ? payload : null);
+      }
+    }
+
+    window.addEventListener("message", handler);
+  });
+}
+
+// ─── Cache → Result Conversion ─────────────────────────────
+
+function convertCacheToResult(data: ChatGPTApiResponse): {
+  messages: Message[];
+  title: string;
+  model: string;
+} {
+  const messages = convertApiMessages(data);
+  const title = data.title || extractTitle();
+  const model = data.default_model_slug || "";
+
+  console.log(
+    `[MindArchive] ChatGPT API: extracted ${messages.length} messages`
+  );
+
+  return { messages, title, model };
+}
+
+// ─── Tree Walk ──────────────────────────────────────────────
+
+/**
+ * Convert ChatGPT API response → Message[] in chronological order.
+ *
+ * ChatGPT stores messages in a mapping tree. We walk from the root
+ * (node with parent==null) forward following children to collect
+ * all visible user/assistant messages in order.
+ *
+ * For branched conversations, we follow children[0] (the original
+ * path). If current_node is present, we walk parent→root then reverse.
+ */
+function convertApiMessages(data: ChatGPTApiResponse): Message[] {
+  const mapping = data.mapping!;
+  const currentNode = data.current_node;
+
+  // Strategy A: walk from current_node back to root via parent pointers
+  if (currentNode && mapping[currentNode]) {
+    const path = walkToRoot(mapping, currentNode);
+    return pathToMessages(path);
+  }
+
+  // Strategy B: walk from root forward following children[0]
+  return walkFromRoot(mapping);
+}
+
+function walkToRoot(
+  mapping: Record<string, ChatGPTApiMessageNode>,
+  startId: string
+): ChatGPTApiMessageNode[] {
+  const path: ChatGPTApiMessageNode[] = [];
+  const visited = new Set<string>();
+  let nodeId: string | undefined = startId;
+
+  while (nodeId && mapping[nodeId] && !visited.has(nodeId)) {
+    visited.add(nodeId);
+    const node: ChatGPTApiMessageNode = mapping[nodeId];
+    path.push(node);
+    nodeId = node.parent ?? undefined;
+  }
+
+  path.reverse(); // root → current
+  return path;
+}
+
+function walkFromRoot(
+  mapping: Record<string, ChatGPTApiMessageNode>
+): Message[] {
+  // Find the root node (parent == null)
+  const root = Object.values(mapping).find((n) => n.parent === null);
+  if (!root || root.children.length === 0) return [];
+
+  // Walk forward following children[0] (the "main" branch)
+  const path: ChatGPTApiMessageNode[] = [];
+  const visited = new Set<string>();
+  let current: ChatGPTApiMessageNode | undefined = mapping[root.children[0]];
+
+  while (current && !visited.has(current.id)) {
+    visited.add(current.id);
+    path.push(current);
+    current = current.children.length > 0
+      ? mapping[current.children[0]]
+      : undefined;
+  }
+
+  return pathToMessages(path);
+}
+
+function pathToMessages(path: ChatGPTApiMessageNode[]): Message[] {
+  const messages: Message[] = [];
+  for (const node of path) {
+    const msg = nodeToMessage(node);
+    if (msg) messages.push(msg);
+  }
+  return messages;
+}
+
+// ─── Node → Message Conversion ─────────────────────────────
+
+/**
+ * Convert a single mapping node → Message.
+ * Returns null for:
+ *   - Nodes without a message (root placeholders)
+ *   - System/tool messages
+ *   - Visually hidden messages (internal)
+ *   - model_editable_context messages (internal)
+ *   - Empty content
+ */
+function nodeToMessage(node: ChatGPTApiMessageNode): Message | null {
+  const msg = node.message;
+  if (!msg) return null;
+
+  const role = msg.author.role;
+  if (role === "system" || role === "tool") return null;
+
+  // Skip visually hidden messages (internal scaffolding)
+  if (msg.metadata?.is_visually_hidden_from_conversation) return null;
+
+  // Skip internal context messages (no visible parts)
+  if (msg.content?.content_type === "model_editable_context") return null;
+
+  // Extract text from parts[] (with image placeholders)
+  let content = extractContentFromParts(msg.content?.parts);
+
+  // Append images from metadata.image_results (web search gallery / DALL-E)
+  const metaImages = extractImagesFromMetadata(msg.metadata);
+  if (metaImages) {
+    content = content ? content + "\n\n" + metaImages : metaImages;
+  }
+
+  if (!content) return null;
+
+  const timestamp = msg.create_time
+    ? new Date(msg.create_time * 1000).toISOString()
+    : undefined;
+
+  return {
+    role: role === "user" ? "user" : "assistant",
+    content,
+    timestamp,
+    uuid: msg.id,
+  };
+}
+
+/** Flatten content.parts[] into a single text string, preserving image placeholders */
+function extractContentFromParts(parts: string[] | undefined): string {
+  if (!parts || parts.length === 0) return "";
+
+  return parts
+    .map((part) => {
+      if (typeof part === "string") {
+        // Strip special citation/entity markers (\ue000–\ue0ff)
+        return part.replace(/[\uE000-\uE0FF]/g, "").trim();
+      }
+
+      // Handle object parts
+      if (typeof part === "object" && part !== null) {
+        const obj = part as Record<string, unknown>;
+        const contentType = String(obj.content_type ?? "");
+
+        // ── Image parts (DALL-E generated, multimodal uploads, etc.) ──
+        if (contentType.startsWith("image") || obj.asset_pointer) {
+          return imagePartToPlaceholder(obj);
+        }
+
+        // ── Text parts ──────────────────────────────────────
+        if (typeof obj.text === "string") {
+          return (obj.text as string).replace(/[\uE000-\uE0FF]/g, "").trim();
+        }
+
+        // ── Other known non-text types: skip silently ───────
+        if (contentType === "model_editable_context" || contentType === "execution_output") {
+          return "";
+        }
+      }
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+/**
+ * Convert an image part object from the ChatGPT API into a
+ * Markdown image placeholder.
+ *
+ * Expected shapes:
+ *   { content_type: "image_asset_pointer", asset_pointer: "file-service://file-xxx", ... }
+ *   { content_type: "image", asset_pointer: "file-service://file-xxx", metadata: { dalle: {...} } }
+ */
+function imagePartToPlaceholder(obj: Record<string, unknown>): string {
+  const assetPointer = String(obj.asset_pointer ?? "");
+
+  // Convert file-service://file-xxx → https://files.oaiusercontent.com/file-xxx
+  let url = "";
+  if (assetPointer.startsWith("file-service://")) {
+    url = "https://files.oaiusercontent.com/" + assetPointer.slice("file-service://".length);
+  }
+
+  // Try to get a meaningful alt text
+  const dalleMeta = (obj.metadata as Record<string, unknown> | undefined)?.dalle as Record<string, unknown> | undefined;
+  const prompt = typeof dalleMeta?.prompt === "string" ? dalleMeta.prompt : "";
+  const alt = prompt
+    ? prompt.slice(0, 80) + (prompt.length > 80 ? "…" : "")
+    : "AI Generated Image";
+
+  if (url) {
+    return `![${alt}](${url})`;
+  }
+  return `[🖼 ${alt}]`;
+}
+
+/**
+ * Extract image placeholders from message metadata.
+ *
+ * ChatGPT stores image search results and DALL-E generations in:
+ *   - metadata.image_results[]  — web image search gallery
+ *   - metadata.content_references[] — may contain image media
+ */
+function extractImagesFromMetadata(
+  metadata: ChatGPTApiMessageMetadata | undefined
+): string {
+  if (!metadata) return "";
+
+  const lines: string[] = [];
+
+  // image_results: web search image gallery
+  const imageResults = metadata.image_results;
+  if (Array.isArray(imageResults) && imageResults.length > 0) {
+    for (const img of imageResults) {
+      if (!img || typeof img !== "object") continue;
+      const obj = img as Record<string, unknown>;
+      const src = stringOr(obj, "image_url", "url", "src", "original_url");
+      const alt = stringOr(obj, "title", "alt", "caption", "name") || "Search Result Image";
+      if (src) {
+        lines.push(`![${alt}](${src})`);
+      } else {
+        lines.push(`[🖼 ${alt}]`);
+      }
+    }
+  }
+
+  // content_references: may contain image/video media
+  const contentRefs = metadata.content_references;
+  if (Array.isArray(contentRefs) && contentRefs.length > 0) {
+    for (const ref of contentRefs) {
+      if (!ref || typeof ref !== "object") continue;
+      const obj = ref as Record<string, unknown>;
+      const type = String(obj.type ?? obj.media_type ?? "");
+      if (!type || type === "image" || type === "photo") {
+        const src = stringOr(obj, "url", "image_url", "src");
+        const alt = stringOr(obj, "title", "alt", "name") || "Attached Image";
+        if (src) {
+          lines.push(`![${alt}](${src})`);
+        }
+      }
+    }
+  }
+
+  return lines.join("\n");
+}
+
 // ─── Fallback ───────────────────────────────────────────────
 // If [data-message-author-role] doesn't match anything,
 // try older ChatGPT DOM patterns.
+
+/** Pick the first non-empty string from a set of keys on an object */
+function stringOr(obj: Record<string, unknown>, ...keys: string[]): string {
+  for (const key of keys) {
+    const v = obj[key];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return "";
+}
 
 function fallbackExtract(): ExtractionResult {
   const messages: Message[] = [];

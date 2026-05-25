@@ -4,6 +4,12 @@
 // Thin adapter that implements PlatformAdapter by delegating
 // to the specialized extractor and observer modules.
 //
+// Extraction strategy (in priority order):
+//   1. API  — Intercepted from page's own fetch()
+//            /backend-api/conversation/{id} → window cache
+//   2. DOM  — [data-message-author-role] selectors
+//            Fallback when API is unavailable.
+//
 // ChatGPT DOM structure (2025–2026):
 //   - Messages are wrapped in [data-message-author-role]
 //     with values "user" or "assistant"
@@ -14,14 +20,14 @@
 // ## Module layout
 //
 //   chatgpt.ts          — this file, the adapter glue
-//   chatgpt/extractor.ts — DOM extraction & text cleaning
+//   chatgpt/extractor.ts — API extraction + DOM extraction & text cleaning
 //   chatgpt/observer.ts  — MutationObserver for real-time capture
 //   chatgpt/types.ts     — lightweight local types
 // ============================================================
 
 import type { PlatformAdapter } from "./base";
 import type { Conversation, Message } from "@/core/types";
-import { extractMessages, extractTitle } from "./chatgpt/extractor";
+import { extractMessages, extractTitle, fetchConversationFromApi } from "./chatgpt/extractor";
 import { observeMessages } from "./chatgpt/observer";
 
 export class ChatGPTAdapter implements PlatformAdapter {
@@ -52,14 +58,28 @@ export class ChatGPTAdapter implements PlatformAdapter {
   }
 
   async captureConversation(): Promise<Conversation> {
-    // Note: history loading is now controlled by the popup via the
-    // "auto-load before capture" setting — no longer called here.
+    // Strategy 1: API (returns full conversation, avoids DOM fragmentation)
+    const apiResult = await fetchConversationFromApi();
 
+    if (apiResult) {
+      console.log(
+        `[MindArchive] ChatGPT captured via API: ${apiResult.messages.length} messages`
+      );
+
+      return {
+        id: this.generateId(),
+        platform: this.id,
+        title: apiResult.title,
+        url: window.location.href,
+        messages: apiResult.messages,
+        capturedAt: new Date().toISOString(),
+      };
+    }
+
+    // Strategy 2: DOM fallback
+    console.log("[MindArchive] ChatGPT API unavailable, falling back to DOM");
     const messages = this.extractMessages();
-
-    console.log(
-      `[MindArchive] Captured conversation: ${messages.length} messages`
-    );
+    console.log(`[MindArchive] ChatGPT captured via DOM: ${messages.length} messages`);
 
     return {
       id: this.generateId(),

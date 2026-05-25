@@ -98,13 +98,20 @@ export interface ClaudeApiResponse {
 export interface DeepSeekApiMessage {
   message_id: number;
   parent_message_id?: number;
-  role: "user" | "assistant";
+  role: "USER" | "ASSISTANT";
   content?: string;
+  fragments?: DeepSeekApiFragment[];
   created_at?: number;
   model_name?: string;
   files?: unknown[];
   thinking?: unknown;
   search_results?: unknown[];
+}
+
+/** Fragment inside a DeepSeek message */
+export interface DeepSeekApiFragment {
+  type: "REQUEST" | "RESPONSE" | "THINK" | "SEARCH";
+  content?: string;
 }
 
 /** Raw response from GET /api/v0/chat/history_messages */
@@ -147,6 +154,8 @@ export interface Conversation {
   messages: Message[];
   /** ISO 8601 timestamp of when the capture was made */
   capturedAt: string;
+  /** Non-empty when capture requires user action (e.g. refresh) */
+  error?: string;
 }
 
 /** Status of the capture process */

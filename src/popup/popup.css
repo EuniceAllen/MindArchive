@@ -167,29 +167,7 @@ body {
   cursor: not-allowed;
 }
 
-/* ── Loader Button ──────────────────────────────────────── */
 
-.btn--loader {
-  background: var(--bg-secondary);
-  color: var(--primary);
-  border: 1.5px dashed var(--primary);
-}
-
-.btn--loader:hover:not(:disabled) {
-  background: var(--primary-light);
-}
-
-.btn--loader.is-loading {
-  border-style: solid;
-  border-color: var(--warning);
-  color: var(--warning);
-  animation: pulse-border 1.2s ease-in-out infinite;
-}
-
-@keyframes pulse-border {
-  0%, 100% { border-color: var(--warning); }
-  50% { border-color: var(--border); }
-}
 
 /* ── Load Progress ──────────────────────────────────────── */
 
@@ -282,70 +260,70 @@ body {
   border-radius: 2px;
 }
 
-/* ── Settings ───────────────────────────────────────────── */
 
-.settings {
-  padding: 8px 0;
+
+/* ── DeepSeek One-Time Auth ─────────────────────────────── */
+
+.deepseek-auth {
+  background: var(--primary-light);
+  border: 1px solid var(--primary);
+  border-radius: var(--radius);
+  padding: 12px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  border-top: 1px solid var(--border);
-  padding-top: 12px;
-  margin-top: 4px;
+  gap: 8px;
 }
 
-.settings-header {
-  font-size: 12px;
+.deepseek-auth-header {
+  font-size: 14px;
   font-weight: 700;
+  color: var(--primary);
+}
+
+.deepseek-auth-steps {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
   color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-bottom: 2px;
+  line-height: 1.7;
 }
 
-.toggle {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  cursor: pointer;
-  user-select: none;
+.deepseek-auth-steps kbd {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-size: 11px;
+  font-family: var(--font-mono);
 }
 
-.toggle input[type="checkbox"] {
-  width: 36px;
-  height: 20px;
-  appearance: none;
-  background: var(--border);
-  border-radius: 10px;
-  position: relative;
-  cursor: pointer;
-  transition: background 0.2s;
-  flex-shrink: 0;
+.deepseek-auth-steps code {
+  background: var(--bg-secondary);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 11px;
 }
 
-.toggle input[type="checkbox"]::after {
-  content: '';
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 16px;
-  height: 16px;
-  background: white;
-  border-radius: 50%;
-  transition: transform 0.2s;
+.deepseek-auth-textarea {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  background: var(--bg);
+  color: var(--text);
+  resize: vertical;
 }
 
-.toggle input[type="checkbox"]:checked {
-  background: var(--primary);
+.deepseek-auth-textarea:focus {
+  outline: none;
+  border-color: var(--primary);
 }
 
-.toggle input[type="checkbox"]:checked::after {
-  transform: translateX(16px);
-}
-
-.toggle-label {
-  font-size: 13px;
-  color: var(--text-secondary);
+.deepseek-auth-error {
+  font-size: 12px;
+  color: var(--danger);
 }
 
 /* ── Empty State ────────────────────────────────────────── */

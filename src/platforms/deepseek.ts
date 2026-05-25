@@ -41,7 +41,7 @@ export class DeepSeekAdapter implements PlatformAdapter {
     // Strategy 1: API (returns raw markdown, no DOM fragmentation)
     const apiResult = await fetchConversationFromApi();
 
-    if (apiResult) {
+    if (apiResult && !apiResult.needsRefresh) {
       console.log(
         `[MindArchive] DeepSeek captured via API: ${apiResult.messages.length} messages`
       );
@@ -56,7 +56,21 @@ export class DeepSeekAdapter implements PlatformAdapter {
       };
     }
 
-    // Strategy 2: DOM fallback
+    // Cache empty — tell user to refresh instead of DOM fallback
+    if (apiResult?.needsRefresh) {
+      console.warn("[MindArchive] DeepSeek: cache empty, asking user to refresh");
+      return {
+        id: "",
+        platform: this.id,
+        title: "",
+        url: window.location.href,
+        messages: [],
+        capturedAt: new Date().toISOString(),
+        error: "NEEDS_REFRESH",
+      };
+    }
+
+    // Strategy 2: DOM fallback (only when API completely unavailable)
     console.log("[MindArchive] DeepSeek API unavailable, falling back to DOM");
     const messages = this.extractMessages();
     console.log(`[MindArchive] DeepSeek captured via DOM: ${messages.length} messages`);
