@@ -111,17 +111,17 @@ src/
 
 ## 🗺 Roadmap
 
-### ✅ 已完成 (v2.0)
+### ✅ 已完成
 
-- ChatGPT / Claude / DeepSeek 全平台支持
-- API 优先提取策略（避免 DOM 碎片化）
-- DeepSeek 递归分页加载 + 一次性授权流程
-- 结构化内容块提取（Claude 深度优先遍历）
-- ChatGPT 完整历史滚动加载引擎
-- Markdown 结构化导出（YAML frontmatter）
-- 本地优先存储（零网络上传）
+- ChatGPT / Claude / DeepSeek 三平台全适配
+- API 优先提取策略（MAIN world fetch 拦截，零额外网络请求）
+- DeepSeek 三级缓存 + 递归分页 + 一次性授权
+- Claude DFS 深度优先遍历，结构化内容块提取
+- ChatGPT 完整历史滚动加载引擎（MutationObserver 防抖）
+- Markdown 结构化导出（YAML frontmatter，兼容 Obsidian / RAG）
+- 本地优先存储，零网络上传，完全离线可用
 - 自动暗色模式
-- 代码清理与架构优化
+- 扩展图标设计
 
 ### 🚧 规划中
 
@@ -130,6 +130,7 @@ src/
 - 🧭 思维图谱 / 知识图谱
 - 🔗 概念链接系统
 - 🌍 Gemini / Perplexity 支持
+- 📦 自定义专有容器格式
 
 ---
 
@@ -149,30 +150,71 @@ MIT
 
 ## 🏷 Changelog
 
-### v2.0.0 (2026-05-25)
+### v2.0.0 (2026-05-25) — 架构精简 · 版本统一
 
-**架构重构 & 体验精简**
+**🧹 代码清理**
+- 遍历全项目消除 20+ 处死代码：未使用类型字段、冗余权限、废弃 handler、空 XHR hook、未引用变量
+- 精简 popup UI：移除已失效的「加载完整对话」手动按钮及关联的进度条 UI
+- 移除不再需要的设置面板（自动加载/自动保存 Toggle），popup 回归极简
 
-- 🔧 **移除废弃功能** — 去掉已失效的「加载完整对话」手动按钮及设置面板
-- 🧹 **代码清理** — 消除 20+ 处死代码、未使用类型、冗余逻辑
-- 📝 **版本统一** — popup 版本号、manifest、package.json 同步为 2.0
-- 📚 **技术文档** — 新增 TECHNICAL.md 完整技术方案
+**🖼 视觉优化**
+- 替换扩展图标为全新设计，适配 16/48/128 三档尺寸
 
-### v1.2.0 (2026-05-24)
+**📝 Markdown 输出优化**
+- 改进代码块安全包裹（safeCodeFence），防止嵌套 fence 破坏下游解析
+- 图片自动转为 `![alt](src)` 占位符，保留语义信息
 
-**Claude API 优先提取**
+**🤖 Agent 体系**
+- 新增 ChatGPT Optimizer agent — DOM 提取、MutationObserver、历史加载、实时捕获专项优化
+- 新增 Markdown Formatter agent — YAML frontmatter、消息渲染、内容块序列化、Obsidian/Notion/RAG 兼容性
 
-- 使用 claude.ai 内部 API 作为主提取策略，返回原始 markdown
-- DOM 深度优先遍历作为回退，支持结构化块提取
+**📚 文档**
+- README 全面重写，核心能力表格化、项目结构细化
+- 新增 TECHNICAL.md（8 章，400+ 行）完整技术方案文档
+- 版本号统一：manifest / package.json / popup 同步为 2.0
 
-### v1.1.0
+---
 
-**DeepSeek 支持**
+### v1.2.0 (2026-05-24) — Claude & DeepSeek API 优先
 
-- fetch 拦截 + 三级缓存架构
-- 递归分页加载长对话
-- 一次性授权流程
+**🔌 Claude — API 优先提取**
+- 主策略切换为 claude.ai 内部 API（`GET /api/organizations/{org}/chat_conversations/{id}`），直接获取原始 Markdown
+- 彻底解决 DOM 内容碎片化：代码块被拆散、行内 code 脱离上下文等痛点
+- DOM DFS 深度优先遍历作为回退，支持 `text | heading | code_block | list | blockquote` 五种结构化块
 
-### v1.0.0
+**🔌 DeepSeek — 递归分页 + 授权流程**
+- 三级缓存架构：MAIN world 拦截 → 隔离世界桥接 → 提取器消费
+- 递归分页加载长对话，自动追随 `has_more` / `cursor` 翻页
+- 一次性授权 UI：用户从 Network 面板复制 fetch 代码，自动提取 Bearer token
 
-**初始发布** — ChatGPT 支持、Markdown 导出、本地存储
+**🐛 修复**
+- manifest.json 版本号与 package.json 同步
+
+---
+
+### v1.1.0 (2026-05-24) — 多平台架构
+
+**🏗 Claude 适配器重写**
+- 通过实际 DOM 侦查确定真实结构：`div.font-claude-response`、`div[class*="font-user-message"]`
+- 代码块通过 `div.overflow-x-auto > pre.code-block__code > code.language-xxx` 定位
+- 发现并确认虚拟滚动问题：长对话中 DOM 节点动态挂载/卸载，滚动加载无法保证完整性 → 推动 v1.2.0 API 优先方案
+
+**🆕 DeepSeek 平台支持**
+- 消息选择器 `.ds-message` + `.ds-assistant-message-main-content` 角色检测
+- MAIN world fetch 拦截 `/api/v0/chat/history_messages`
+- 消息片段解析：REQUEST / RESPONSE / THINK / SEARCH
+
+**🔄 ChatGPT 历史加载引擎**
+- 智能滚动容器检测算法：`overflow-y` 候选收集 → 按可滚动区域排序 → 逐元素测试 scrollTop 可写性 → 向上 3 层父级回退
+- MutationObserver 防抖稳定化：等待 React 批量渲染完成再测量，避免误判加载完毕
+- 三重指标对比（messageCount / scrollHeight / scrollTop），连续 3 轮全稳定才判定完成
+
+---
+
+### v1.0.0 (2026-05-23) — 初始发布
+
+- ChatGPT 支持：`[data-message-author-role]` 语义选择器
+- Markdown 结构化导出（YAML frontmatter + 角色标签）
+- Chrome Local Storage 本地存储
+- 自动保存开关
+- 暗色模式支持
